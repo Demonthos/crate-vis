@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use krates::Krates;
@@ -9,112 +10,59 @@ use layout::core::style::*;
 use layout::std_shapes::shapes::*;
 use layout::topo::layout::VisualGraph;
 
-use clap::Parser;
+#[derive(Default)]
+pub struct VisualizationCfg {
+    pub workspace_color: Rgba,
+    pub duplicate_color: Rgba,
+    pub exclude: HashSet<String>,
+    pub only_workspace: bool,
+    pub targets: Vec<String>,
+    pub manifest_path: PathBuf,
+    pub output: PathBuf,
+    pub features: Vec<String>,
+    pub all_features: bool,
+}
 
-/// Simple program to greet a person
-#[derive(Parser, Debug, Default)]
-#[command(author, version, about)]
-pub struct Args {
-    #[arg(short, long, default_value_t = Default::default())]
-    workspace_color: Rgba,
-
-    #[arg(short, long, default_value_t = Default::default())]
-    duplicate_color: Rgba,
-
-    #[arg(short, long)]
-    exclude: Option<Vec<String>>,
-
-    #[arg(short, long, default_value_t = Default::default())]
-    only_workspace: bool,
-
-    #[arg(short, long)]
-    targets: Vec<String>,
-
-    #[arg(short, long)]
-    manifest_path: Option<String>,
-
-    #[arg(short, long)]
-    output: Option<String>,
-
-    #[arg(short, long)]
-    features: Option<Vec<String>>,
-
-    #[arg(short, long, default_value_t = Default::default())]
-    all_features: bool,
+impl VisualizationCfg {
+    fn should_include(&self, name: &str, in_workspace: bool) -> bool {
+        !self.exclude.contains(name) && (!self.only_workspace || in_workspace)
+    }
 }
 
 #[test]
 fn run() {
-    let args = Args {
-        workspace_color: Rgba {
-            r: 0,
-            g: 255,
-            b: 0,
-            a: 255,
-        },
-        duplicate_color: Rgba {
-            r: 255,
-            g: 0,
-            b: 0,
-            a: 255,
-        },
-        only_workspace: false,
-        ..Default::default()
-    };
+    let args = VisualizationCfg::default();
 
     generate_graph(args).unwrap();
 }
 
-pub fn generate_graph(args: Args) -> Result<(), krates::Error> {
+pub fn generate_graph(cfg: VisualizationCfg) -> Result<(), krates::Error> {
     use krates::{cm, Builder, Cmd};
-    dbg!(&args);
 
     let mut cmd = Cmd::new();
-    cmd.manifest_path(args.manifest_path.unwrap_or("./Cargo.toml".to_string()));
-    cmd.features(args.features.iter().flat_map(|i| i.iter().cloned()));
-    if args.all_features {
+    cmd.manifest_path(cfg.manifest_path.clone());
+    cmd.features(cfg.features.clone());
+    if cfg.all_features {
         cmd.all_features();
     }
 
     let mut builder = Builder::new();
 
-    builder.include_targets(
-        args.targets
-            .iter()
-            .map(|s| (s.as_str(), Default::default())),
-    );
+    builder.include_targets(cfg.targets.iter().map(|s| (s.as_str(), Default::default())));
 
     let krates: Krates = builder.build(cmd, |_: cm::Package| {})?;
 
-    let mut vg = petgraph_to_graph_vis(
-        krates,
-        args.only_workspace,
-        args.workspace_color.to_u32(),
-        args.duplicate_color.to_u32(),
-        args.exclude
-            .iter()
-            .flat_map(|v| v.iter().map(|s| s.as_str()))
-            .collect(),
-    );
+    let mut vg = krates_to_graph_vis(krates, &cfg);
 
     let mut svg = layout::backends::svg::SVGWriter::new();
     vg.do_it(false, false, false, &mut svg);
 
-    let _ = layout::core::utils::save_to_file(
-        args.output.as_deref().unwrap_or("./graph.svg"),
-        &svg.finalize(),
-    );
+    let _ = layout::core::utils::save_to_file(&cfg.output.to_string_lossy(), &svg.finalize());
 
     Ok(())
 }
 
-fn petgraph_to_graph_vis(
-    krates: Krates,
-    workspace_only: bool,
-    workspace_color: u32,
-    duplicate_color: u32,
-    exclude: HashSet<&str>,
-) -> VisualGraph {
+fn krates_to_graph_vis(krates: Krates, cfg: &VisualizationCfg) -> VisualGraph {
     let in_workspace: HashSet<_> = krates
         .workspace_members()
         .filter_map(|id| match id {
@@ -149,18 +97,19 @@ fn petgraph_to_graph_vis(
         let sp = ShapeKind::new_box(&format!("{}-{}", name, version));
         let mut look = StyleAttr::simple();
         if duplicates.contains(name) {
-            look.fill_color = Some(layout::core::color::Color::new(duplicate_color));
+            look.fill_color = Some(layout::core::color::Color::new(
+                cfg.duplicate_color.to_u32(),
+            ));
         }
         let is_in_workspace = in_workspace.contains(&krate.id);
         if is_in_workspace {
-            look.fill_color = Some(layout::core::color::Color::new(workspace_color));
+            look.fill_color = Some(layout::core::color::Color::new(
+                cfg.workspace_color.to_u32(),
+            ));
         }
         let node = Element::create(sp, look, Orientation::TopToBottom, sz);
 
-        if workspace_only && !is_in_workspace {
-            continue;
-        }
-        if exclude.contains(name.as_str()) {
+        if !cfg.should_include(name.as_str(), is_in_workspace) {
             continue;
         }
         let handle = vg.add_node(node);
@@ -169,10 +118,7 @@ fn petgraph_to_graph_vis(
 
     for krate in krates.krates() {
         let is_in_workspace = in_workspace.contains(&krate.id);
-        if workspace_only && !is_in_workspace {
-            continue;
-        }
-        if exclude.contains(krate.name.as_str()) {
+        if !cfg.should_include(krate.name.as_str(), is_in_workspace) {
             continue;
         }
 
@@ -181,10 +127,7 @@ fn petgraph_to_graph_vis(
         let handle0 = nodes[&krate.id];
         for dep in krates.direct_dependencies(id) {
             let is_in_workspace = in_workspace.contains(&dep.krate.id);
-            if workspace_only && !is_in_workspace {
-                continue;
-            }
-            if exclude.contains(dep.krate.name.as_str()) {
+            if !cfg.should_include(dep.krate.name.as_str(), is_in_workspace) {
                 continue;
             }
             let handle1 = nodes[&dep.krate.id];
@@ -197,11 +140,11 @@ fn petgraph_to_graph_vis(
 }
 
 #[derive(Debug, Clone, Default)]
-struct Rgba {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
+pub struct Rgba {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
 }
 
 impl Display for Rgba {

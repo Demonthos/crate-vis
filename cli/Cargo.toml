@@ -8,4 +8,4 @@ authors = ["Evan Almloff"]
 
 [dependencies]
 crate-vis = { path = "../" }
-clap = { version = "4.2.7" }
+clap = { version = "4.2.7", features = ["derive"] }

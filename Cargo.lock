@@ -186,7 +186,6 @@ dependencies = [
 name = "crate-vis"
 version = "0.1.0"
 dependencies = [
- "clap",
  "graphviz-rust",
  "krates",
  "layout-rs",
