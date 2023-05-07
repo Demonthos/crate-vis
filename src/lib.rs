@@ -67,6 +67,7 @@ fn run() {
 
 pub fn generate_graph(args: Args) -> Result<(), krates::Error> {
     use krates::{cm, Builder, Cmd};
+    dbg!(&args);
 
     let mut cmd = Cmd::new();
     cmd.manifest_path(args.manifest_path.unwrap_or("./Cargo.toml".to_string()));
@@ -90,6 +91,10 @@ pub fn generate_graph(args: Args) -> Result<(), krates::Error> {
         args.only_workspace,
         args.workspace_color.to_u32(),
         args.duplicate_color.to_u32(),
+        args.exclude
+            .iter()
+            .flat_map(|v| v.iter().map(|s| s.as_str()))
+            .collect(),
     );
 
     let mut svg = layout::backends::svg::SVGWriter::new();
@@ -108,6 +113,7 @@ fn petgraph_to_graph_vis(
     workspace_only: bool,
     workspace_color: u32,
     duplicate_color: u32,
+    exclude: HashSet<&str>,
 ) -> VisualGraph {
     let in_workspace: HashSet<_> = krates
         .workspace_members()
@@ -129,7 +135,6 @@ fn petgraph_to_graph_vis(
             if !already_contained {
                 duplicates.insert(name);
             }
-            continue;
         } else {
             let mut set = HashSet::new();
             set.insert(version);
@@ -155,6 +160,9 @@ fn petgraph_to_graph_vis(
         if workspace_only && !is_in_workspace {
             continue;
         }
+        if exclude.contains(name.as_str()) {
+            continue;
+        }
         let handle = vg.add_node(node);
         nodes.insert(krate.id.clone(), handle);
     }
@@ -164,6 +172,9 @@ fn petgraph_to_graph_vis(
         if workspace_only && !is_in_workspace {
             continue;
         }
+        if exclude.contains(krate.name.as_str()) {
+            continue;
+        }
 
         let id = krates.nid_for_kid(&krate.id).unwrap();
 
@@ -171,6 +182,9 @@ fn petgraph_to_graph_vis(
         for dep in krates.direct_dependencies(id) {
             let is_in_workspace = in_workspace.contains(&dep.krate.id);
             if workspace_only && !is_in_workspace {
+                continue;
+            }
+            if exclude.contains(dep.krate.name.as_str()) {
                 continue;
             }
             let handle1 = nodes[&dep.krate.id];
