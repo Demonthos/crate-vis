@@ -1,0 +1,15 @@
+[package]
+name = "retained-size"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0.162", features = ["derive"] }
+serde_json = "1.0.96"
+twiggy-analyze = { version = "=0.7.0" }
+twiggy-ir = { version = "=0.7.0" }
+twiggy-opt = { version = "=0.7.0", features = ["cli"] }
+twiggy-parser = { version = "=0.7.0" }
+twiggy-traits = { version = "=0.7.0" }
