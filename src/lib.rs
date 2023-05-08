@@ -32,7 +32,7 @@ impl VisualizationCfg {
     }
 
     fn should_connect(&self, edge: &krates::Edge) -> bool {
-        match dbg!(edge) {
+        match edge {
             krates::Edge::DepFeature { kind, .. } | krates::Edge::Dep { kind, .. } => {
                 self.kinds.contains(kind)
             }
@@ -102,7 +102,6 @@ fn krates_to_graph_vis(krates: Krates, cfg: &VisualizationCfg) -> VisualGraph {
                     let mut has_edges = false;
                     connecting.all(|e| {
                         has_edges = true;
-                        dbg!(e.weight());
                         let edge = e.weight();
                         cfg.should_connect(edge)
                     }) && has_edges
