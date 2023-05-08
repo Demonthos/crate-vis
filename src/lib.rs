@@ -3,8 +3,11 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+pub use krates;
+
 use krates::Krates;
 use layout::core::base::Orientation;
+use layout::core::color::Color;
 use layout::core::geometry::Point;
 use layout::core::style::*;
 use layout::std_shapes::shapes::*;
@@ -13,7 +16,6 @@ use layout::topo::layout::VisualGraph;
 #[derive(Default)]
 pub struct VisualizationCfg {
     pub workspace_color: Rgba,
-    pub duplicate_color: Rgba,
     pub exclude: HashSet<String>,
     pub only_workspace: bool,
     pub targets: Vec<String>,
@@ -21,11 +23,21 @@ pub struct VisualizationCfg {
     pub output: PathBuf,
     pub features: Vec<String>,
     pub all_features: bool,
+    pub kinds: Vec<krates::DepKind>,
 }
 
 impl VisualizationCfg {
     fn should_include(&self, name: &str, in_workspace: bool) -> bool {
-        !self.exclude.contains(name) && (!self.only_workspace || in_workspace)
+        !self.exclude.contains(name) && (in_workspace || !self.only_workspace)
+    }
+
+    fn should_connect(&self, edge: &krates::Edge) -> bool {
+        match dbg!(edge) {
+            krates::Edge::DepFeature { kind, .. } | krates::Edge::Dep { kind, .. } => {
+                self.kinds.contains(kind)
+            }
+            krates::Edge::Feature => true,
+        }
     }
 }
 
@@ -72,67 +84,66 @@ fn krates_to_graph_vis(krates: Krates, cfg: &VisualizationCfg) -> VisualGraph {
         .collect();
 
     let mut vg = VisualGraph::new(Orientation::TopToBottom);
-
-    let mut seen: HashMap<&String, HashSet<&krates::semver::Version>> = HashMap::new();
-    let mut duplicates = HashSet::new();
-    for krate in krates.krates() {
-        let name = &krate.name;
-        let version = &krate.version;
-        if let Some(set) = seen.get_mut(name) {
-            let already_contained = set.insert(version);
-            if !already_contained {
-                duplicates.insert(name);
-            }
-        } else {
-            let mut set = HashSet::new();
-            set.insert(version);
-            seen.insert(name, set);
-        }
-    }
-
-    let sz = Point::new(100., 100.);
+    let graph = krates.graph();
     let mut nodes = HashMap::new();
+
     for krate in krates.krates() {
         let (name, version) = (&krate.name, &krate.version);
-        let sp = ShapeKind::new_box(&format!("{}-{}", name, version));
-        let mut look = StyleAttr::simple();
-        if duplicates.contains(name) {
-            look.fill_color = Some(layout::core::color::Color::new(
-                cfg.duplicate_color.to_u32(),
-            ));
-        }
-        let is_in_workspace = in_workspace.contains(&krate.id);
-        if is_in_workspace {
-            look.fill_color = Some(layout::core::color::Color::new(
-                cfg.workspace_color.to_u32(),
-            ));
-        }
-        let node = Element::create(sp, look, Orientation::TopToBottom, sz);
 
-        if !cfg.should_include(name.as_str(), is_in_workspace) {
-            continue;
+        let is_in_workspace = in_workspace.contains(&krate.id);
+        let id = &krates.nid_for_kid(&krate.id).unwrap();
+
+        if cfg.should_include(name.as_str(), is_in_workspace)
+            && (is_in_workspace
+                || in_workspace.iter().any(|k| {
+                    let workspace_id = &krates.nid_for_kid(k).unwrap();
+
+                    let mut connecting = graph.edges_connecting(*workspace_id, *id);
+                    let mut has_edges = false;
+                    connecting.all(|e| {
+                        has_edges = true;
+                        dbg!(e.weight());
+                        let edge = e.weight();
+                        cfg.should_connect(edge)
+                    }) && has_edges
+                }))
+        {
+            let sp = ShapeKind::new_box(&format!("{}-{}", name, version));
+            let mut look = StyleAttr::simple();
+
+            if is_in_workspace {
+                look.fill_color = Some(layout::core::color::Color::new(
+                    cfg.workspace_color.to_u32(),
+                ));
+            }
+
+            let sz = Point::new(100., 100.);
+            let node = Element::create(sp, look, Orientation::TopToBottom, sz);
+            let handle = vg.add_node(node);
+
+            nodes.insert(krate.id.clone(), handle);
         }
-        let handle = vg.add_node(node);
-        nodes.insert(krate.id.clone(), handle);
     }
 
     for krate in krates.krates() {
-        let is_in_workspace = in_workspace.contains(&krate.id);
-        if !cfg.should_include(krate.name.as_str(), is_in_workspace) {
-            continue;
-        }
-
-        let id = krates.nid_for_kid(&krate.id).unwrap();
-
-        let handle0 = nodes[&krate.id];
-        for dep in krates.direct_dependencies(id) {
-            let is_in_workspace = in_workspace.contains(&dep.krate.id);
-            if !cfg.should_include(dep.krate.name.as_str(), is_in_workspace) {
-                continue;
+        if let Some(handle0) = nodes.get(&krate.id) {
+            let id = krates.nid_for_kid(&krate.id).unwrap();
+            for dep in krates.direct_dependencies(id) {
+                let edge_id = dep.edge_id;
+                let edge = graph.edge_weight(edge_id).unwrap();
+                if cfg.should_connect(edge) {
+                    if let Some(handle1) = nodes.get(&dep.krate.id) {
+                        if handle0 == handle1 {
+                            continue;
+                        }
+                        let mut arrow = Arrow::simple("");
+                        if matches!(edge, krates::Edge::Feature) {
+                            arrow.look.line_color = Color::new(rgba(0, 0, 0, 255 / 2));
+                        }
+                        vg.add_edge(arrow, *handle0, *handle1);
+                    }
+                }
             }
-            let handle1 = nodes[&dep.krate.id];
-            let arrow = Arrow::simple("");
-            vg.add_edge(arrow, handle0, handle1);
         }
     }
 
