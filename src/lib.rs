@@ -77,9 +77,19 @@ pub fn generate_graph(cfg: VisualizationCfg) -> Result<(), krates::Error> {
 fn krates_to_graph_vis(krates: Krates, cfg: &VisualizationCfg) -> VisualGraph {
     let in_workspace: HashSet<_> = krates
         .workspace_members()
-        .filter_map(|id| match id {
-            krates::Node::Krate { id, .. } => Some(id.clone()),
-            _ => None,
+        .filter_map(|id| {
+            let krate = match id {
+                krates::Node::Krate { id, .. } => {
+                    let idx = krates.nid_for_kid(id).unwrap();
+                    &krates[idx]
+                }
+                krates::Node::Feature { krate_index, .. } => &krates[*krate_index],
+            };
+            if cfg.should_include(&krate.name, true) {
+                Some(krate.id.clone())
+            } else {
+                None
+            }
         })
         .collect();
 
